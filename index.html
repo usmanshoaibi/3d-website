@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Character on Grid with Walking Animation</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #87CEEB;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        .instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+        }
+        @media (max-width: 768px) {
+            .instructions {
+                font-size: 14px;
+                top: 5px;
+                left: 5px;
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="instructions">
+        W, A, S, D to move character • Drag to rotate camera • Pinch to zoom
+    </div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+
+        const camera = {
+            distance: 500,
+            angleX: 0.3,
+            angleY: 0.5,
+            fov: 800
+        };
+
+        const character = {
+            position: {x: 0, y: 0, z: 0},
+            rotation: 0,  // Character's facing direction
+            animationTime: 0,
+            isWalking: false,
+            walkSpeed: 2.5,
+            walkingCycle: 0
+        };
+
+        let isDragging = false;
+        let lastX, lastY;
+        let initialPinchDistance = null;
+        let initialCameraDistance = null;
+        let keysPressed = {};
+        
+        // Animation parameters
+        const animationSpeed = 0.1;
+        const limbSwingMax = 0.6;  // Maximum swing angle in radians
+        const bobHeight = 5;       // How much the character bobs up and down
+
+        // Generate parts with positions relative to character position
+        function getCharacterParts() {
+            // Apply walking animation to parts
+            const walkCycle = character.isWalking ? Math.sin(character.walkingCycle) : 0;
+            const leftLegSwing = walkCycle * limbSwingMax;
+            const rightLegSwing = -walkCycle * limbSwingMax;
+            const leftArmSwing = -walkCycle * limbSwingMax * 0.7;
+            const rightArmSwing = walkCycle * limbSwingMax * 0.7;
+            
+            // Bob up and down while walking
+            const bobOffset = character.isWalking ? Math.abs(walkCycle) * bobHeight : 0;
+            
+            return [
+                // Head
+                {type: 'sphere', radius: 40, position: {
+                    x: character.position.x, 
+                    y: character.position.y - 120 - bobOffset, 
+                    z: character.position.z
+                }, color: [255, 215, 0]},
+                
+                // Body
+                {type: 'box', width: 60, height: 100, depth: 30, position: {
+                    x: character.position.x, 
+                    y: character.position.y - bobOffset, 
+                    z: character.position.z
+                }, color: [70, 130, 180]},
+                
+                // Left leg (rotating around the hip joint)
+                {type: 'box', width: 20, height: 80, depth: 20, 
+                 rotation: leftLegSwing,
+                 pivot: {x: character.position.x - 20, y: character.position.y + 40 - bobOffset, z: character.position.z},
+                 position: {
+                    x: character.position.x - 20, 
+                    y: character.position.y + 80 - bobOffset, 
+                    z: character.position.z
+                }, color: [70, 130, 180]},
+                
+                // Right leg (rotating around the hip joint)
+                {type: 'box', width: 20, height: 80, depth: 20,
+                 rotation: rightLegSwing,
+                 pivot: {x: character.position.x + 20, y: character.position.y + 40 - bobOffset, z: character.position.z},
+                 position: {
+                    x: character.position.x + 20, 
+                    y: character.position.y + 80 - bobOffset, 
+                    z: character.position.z
+                }, color: [70, 130, 180]},
+                
+                // Left arm (rotating around the shoulder)
+                {type: 'box', width: 25, height: 90, depth: 25,
+                 rotation: leftArmSwing,
+                 pivot: {x: character.position.x - 30, y: character.position.y - 40 - bobOffset, z: character.position.z},
+                 position: {
+                    x: character.position.x - 30, 
+                    y: character.position.y + 5 - bobOffset, 
+                    z: character.position.z
+                }, color: [30, 144, 255]},
+                
+                // Right arm (rotating around the shoulder)
+                {type: 'box', width: 25, height: 90, depth: 25,
+                 rotation: rightArmSwing,
+                 pivot: {x: character.position.x + 30, y: character.position.y - 40 - bobOffset, z: character.position.z},
+                 position: {
+                    x: character.position.x + 30, 
+                    y: character.position.y + 5 - bobOffset, 
+                    z: character.position.z
+                }, color: [30, 144, 255]},
+                
+                // Eyes
+                {type: 'sphere', radius: 8, position: {
+                    x: character.position.x - 15, 
+                    y: character.position.y - 130 - bobOffset, 
+                    z: character.position.z + 35
+                }, color: [0, 0, 0]},
+                {type: 'sphere', radius: 8, position: {
+                    x: character.position.x + 15, 
+                    y: character.position.y - 130 - bobOffset, 
+                    z: character.position.z + 35
+                }, color: [0, 0, 0]},
+                
+                // Mouth
+                {type: 'mouth', width: 30, height: 10, position: {
+                    x: character.position.x, 
+                    y: character.position.y - 110 - bobOffset, 
+                    z: character.position.z + 35
+                }, color: [139, 0, 0]}
+            ];
+        }
+
+        function createBoxFaces(part) {
+            const {width, height, depth, position, color, rotation, pivot} = part;
+            const halfW = width/2, halfH = height/2, halfD = depth/2;
+            let vertices = [
+                {x: -halfW, y: -halfH, z: -halfD}, {x: halfW, y: -halfH, z: -halfD},
+                {x: halfW, y: halfH, z: -halfD}, {x: -halfW, y: halfH, z: -halfD},
+                {x: -halfW, y: -halfH, z: halfD}, {x: halfW, y: -halfH, z: halfD},
+                {x: halfW, y: halfH, z: halfD}, {x: -halfW, y: halfH, z: halfD}
+            ];
+            
+            // Apply rotation to vertices if part has rotation
+            if (rotation && pivot) {
+                vertices = vertices.map(v => {
+                    // First translate to pivot point
+                    let x = v.x + position.x - pivot.x;
+                    let y = v.y + position.y - pivot.y;
+                    let z = v.z + position.z - pivot.z;
+                    
+                    // Apply rotation around X axis (for limb swinging)
+                    const cosX = Math.cos(rotation);
+                    const sinX = Math.sin(rotation);
+                    const y1 = y * cosX - z * sinX;
+                    const z1 = y * sinX + z * cosX;
+                    
+                    // Translate back from pivot point
+                    return {
+                        x: x + pivot.x,
+                        y: y1 + pivot.y,
+                        z: z1 + pivot.z
+                    };
+                });
+                
+                // Adjusted faces with rotated vertices
+                return [
+                    {vertices: [0, 1, 2, 3], color, centerZ: 0},
+                    {vertices: [4, 5, 6, 7], color, centerZ: 0},
+                    {vertices: [0, 4, 7, 3], color, centerZ: 0},
+                    {vertices: [1, 5, 6, 2], color, centerZ: 0},
+                    {vertices: [0, 1, 5, 4], color, centerZ: 0},
+                    {vertices: [3, 2, 6, 7], color, centerZ: 0}
+                ].map(face => ({
+                    ...face,
+                    vertices: face.vertices.map(i => vertices[i]),
+                    center: {
+                        x: (vertices[0].x + vertices[6].x) / 2,
+                        y: (vertices[0].y + vertices[6].y) / 2,
+                        z: (vertices[0].z + vertices[6].z) / 2
+                    }
+                }));
+            } else {
+                // Original box creation logic
+                return [
+                    {vertices: [0, 1, 2, 3], color, centerZ: -halfD},
+                    {vertices: [4, 5, 6, 7], color, centerZ: halfD},
+                    {vertices: [0, 4, 7, 3], color, centerZ: 0},
+                    {vertices: [1, 5, 6, 2], color, centerZ: 0},
+                    {vertices: [0, 1, 5, 4], color, centerZ: 0},
+                    {vertices: [3, 2, 6, 7], color, centerZ: 0}
+                ].map(face => ({
+                    ...face,
+                    vertices: face.vertices.map(i => ({
+                        x: vertices[i].x + position.x,
+                        y: vertices[i].y + position.y,
+                        z: vertices[i].z + position.z
+                    })),
+                    center: {x: position.x, y: position.y, z: position.z + face.centerZ}
+                }));
+            }
+        }
+
+        function createSphereFaces(part) {
+            const {radius, position, color} = part;
+            const slices = 12, stacks = 12;
+            const vertices = [];
+            const faces = [];
+            for (let i = 0; i <= stacks; i++) {
+                const phi = Math.PI * i / stacks;
+                for (let j = 0; j <= slices; j++) {
+                    const theta = 2 * Math.PI * j / slices;
+                    vertices.push({
+                        x: radius * Math.sin(phi) * Math.cos(theta) + position.x,
+                        y: radius * Math.sin(phi) * Math.sin(theta) + position.y,
+                        z: radius * Math.cos(phi) + position.z
+                    });
+                }
+            }
+            for (let i = 0; i < stacks; i++) {
+                for (let j = 0; j < slices; j++) {
+                    const a = i * (slices + 1) + j;
+                    const b = a + slices + 1;
+                    faces.push({
+                        vertices: [vertices[a], vertices[b], vertices[b+1], vertices[a+1]],
+                        color,
+                        center: {
+                            x: (vertices[a].x + vertices[b].x + vertices[b+1].x + vertices[a+1].x)/4,
+                            y: (vertices[a].y + vertices[b].y + vertices[b+1].y + vertices[a+1].y)/4,
+                            z: (vertices[a].z + vertices[b].z + vertices[b+1].z + vertices[a+1].z)/4
+                        }
+                    });
+                }
+            }
+            return faces;
+        }
+
+        function createMouthFaces(part) {
+            const {width, height, position, color} = part;
+            const halfW = width/2, halfH = height/2;
+            const segments = 3;
+            const mouthVertices = [];
+            const mouthFaces = [];
+            for (let i = 0; i <= segments; i++) {
+                const t = i/segments;
+                const x = -halfW + t * width;
+                const y = Math.sin(t * Math.PI) * height/3;
+                mouthVertices.push({
+                    x: x + position.x,
+                    y: y + position.y,
+                    z: position.z
+                });
+            }
+            for (let i = 0; i < segments; i++) {
+                mouthFaces.push({
+                    vertices: [
+                        mouthVertices[i],
+                        mouthVertices[i+1],
+                        {x: mouthVertices[i+1].x, y: mouthVertices[i+1].y - height/3, z: position.z},
+                        {x: mouthVertices[i].x, y: mouthVertices[i].y - height/3, z: position.z}
+                    ],
+                    color,
+                    center: {x: position.x, y: position.y - height/6, z: position.z}
+                });
+            }
+            return mouthFaces;
+        }
+
+        function project(point) {
+            const scale = camera.fov / (camera.fov + point.z + camera.distance);
+            return {
+                x: point.x * scale + canvas.width / 2,
+                y: -point.y * scale + canvas.height / 2
+            };
+        }
+
+        function drawFace(face) {
+            const projected = face.vertices.map(project);
+            ctx.beginPath();
+            ctx.moveTo(projected[0].x, projected[0].y);
+            for (let i = 1; i < projected.length; i++) {
+                ctx.lineTo(projected[i].x, projected[i].y);
+            }
+            ctx.closePath();
+            const [r, g, b] = face.color;
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+            ctx.stroke();
+        }
+
+        function rotatePoint(point) {
+            const cosY = Math.cos(camera.angleY);
+            const sinY = Math.sin(camera.angleY);
+            const x1 = point.x * cosY - point.z * sinY;
+            const z1 = point.x * sinY + point.z * cosY;
+            const cosX = Math.cos(camera.angleX);
+            const sinX = Math.sin(camera.angleX);
+            const y1 = point.y * cosX - z1 * sinX;
+            const z2 = point.y * sinX + z1 * cosX;
+            return {x: x1, y: y1, z: z2};
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+            ctx.lineWidth = 1;
+            const size = 1000;
+            const step = 50;
+            for (let x = -size; x <= size; x += step) {
+                ctx.beginPath();
+                const p1 = project(rotatePoint({x: x, y: 200, z: -size}));
+                const p2 = project(rotatePoint({x: x, y: 200, z: size}));
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+            }
+            for (let z = -size; z <= size; z += step) {
+                ctx.beginPath();
+                const p1 = project(rotatePoint({x: -size, y: 200, z: z}));
+                const p2 = project(rotatePoint({x: size, y: 200, z: z}));
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+            }
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGrid();
+            
+            const parts = getCharacterParts();
+            let allFaces = [];
+            
+            parts.forEach(part => {
+                if (part.type === 'box') {
+                    allFaces.push(...createBoxFaces(part));
+                } else if (part.type === 'sphere') {
+                    allFaces.push(...createSphereFaces(part));
+                } else if (part.type === 'mouth') {
+                    allFaces.push(...createMouthFaces(part));
+                }
+            });
+            
+            const rotatedFaces = allFaces.map(face => {
+                const rotatedVertices = face.vertices.map(rotatePoint);
+                const rotatedCenter = rotatePoint(face.center);
+                return {
+                    face: {...face, vertices: rotatedVertices},
+                    depth: rotatedCenter.z
+                };
+            });
+            
+            rotatedFaces.sort((a, b) => b.depth - a.depth);
+            rotatedFaces.forEach(({face}) => drawFace(face));
+        }
+
+        function moveCharacter() {
+            const moveSpeed = character.walkSpeed;
+            let dx = 0, dz = 0;
+            
+            if (keysPressed['w']) dz = -moveSpeed;
+            if (keysPressed['s']) dz = moveSpeed;
+            if (keysPressed['a']) dx = -moveSpeed;
+            if (keysPressed['d']) dx = moveSpeed;
+            
+            // Only move and animate if a movement key is pressed
+            character.isWalking = (dx !== 0 || dz !== 0);
+            
+            if (character.isWalking) {
+                // Update walking animation
+                character.walkingCycle += animationSpeed;
+                
+                // Calculate direction based on camera angle
+                const cosY = Math.cos(camera.angleY);
+                const sinY = Math.sin(camera.angleY);
+                
+                // Adjust movement direction based on camera orientation
+                const adjustedDx = dx * cosY + dz * sinY;
+                const adjustedDz = -dx * sinY + dz * cosY;
+                
+                // Update character position
+                character.position.x += adjustedDx;
+                character.position.z += adjustedDz;
+                
+                // Update character rotation based on movement direction
+                if (adjustedDx !== 0 || adjustedDz !== 0) {
+                    character.rotation = Math.atan2(adjustedDz, adjustedDx);
+                }
+            }
+            
+            render();
+        }
+
+        // Key event handlers
+        document.addEventListener('keydown', (e) => {
+            keysPressed[e.key.toLowerCase()] = true;
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keysPressed[e.key.toLowerCase()] = false;
+        });
+
+        // Mouse/touch event handlers
+        function handleStart(x, y) {
+            isDragging = true;
+            lastX = x;
+            lastY = y;
+        }
+
+        function handleMove(x, y) {
+            if (!isDragging) return;
+            const dx = x - lastX;
+            const dy = y - lastY;
+            // Changed these signs to make rotation direction more natural
+            camera.angleY -= dx * 0.01;  // Changed from += to -=
+            camera.angleX -= dy * 0.01;  // Changed from += to -=
+            lastX = x;
+            lastY = y;
+            render();
+        }
+
+        function handleEnd() {
+            isDragging = false;
+        }
+
+        // Mouse events
+        canvas.addEventListener('mousedown', (e) => {
+            handleStart(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            handleMove(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mouseup', handleEnd);
+        canvas.addEventListener('mouseleave', handleEnd);
+
+        // Touch events
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                handleStart(e.touches[0].clientX, e.touches[0].clientY);
+            } else if (e.touches.length === 2) {
+                // Pinch zoom
+                initialPinchDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                initialCameraDistance = camera.distance;
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1 && isDragging) {
+                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            } else if (e.touches.length === 2 && initialPinchDistance !== null) {
+                // Handle pinch zoom
+                const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const scale = initialPinchDistance / currentDistance;
+                camera.distance = Math.max(200, Math.min(1000, initialCameraDistance * scale));
+                render();
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 0) {
+                handleEnd();
+                initialPinchDistance = null;
+            } else if (e.touches.length === 1) {
+                // Switch to rotation mode if one finger remains
+                initialPinchDistance = null;
+                handleStart(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        });
+
+        // Zoom with mouse wheel
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            camera.distance = Math.max(200, Math.min(1000, camera.distance - e.deltaY * 0.5));
+            render();
+        });
+
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            render();
+        });
+
+        // Animation loop
+        function animate() {
+            moveCharacter();
+            requestAnimationFrame(animate);
+        }
+
+        // Start animation loop
+        animate();
+    </script>
+</body>
+</html> this i my code an i want u to make its rotation like this one <!DOCTYPE html>
+<html>
+<head>
+    <title>3D Character on Grid</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #87CEEB;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        .instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255,255,255,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            pointer-events: none;
+        }
+        @media (max-width: 768px) {
+            .instructions {
+                font-size: 14px;
+                top: 5px;
+                left: 5px;
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="instructions">Drag to rotate • Pinch to zoom</div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+
+        const camera = {
+            distance: 500,
+            angleX: 0.3,
+            angleY: 0.5,
+            fov: 800
+        };
+
+        let isDragging = false;
+        let lastX, lastY;
+        let initialPinchDistance = null;
+        let initialCameraDistance = null;
+
+        const parts = [
+            {type: 'sphere', radius: 40, position: {x: 0, y: -120, z: 0}, color: [255, 215, 0]},
+            {type: 'box', width: 60, height: 100, depth: 30, position: {x: 0, y: 0, z: 0}, color: [70, 130, 180]},
+            {type: 'box', width: 20, height: 80, depth: 20, position: {x: -40, y: -30, z: 0}, color: [70, 130, 180]},
+            {type: 'box', width: 20, height: 80, depth: 20, position: {x: 40, y: -30, z: 0}, color: [70, 130, 180]},
+            {type: 'box', width: 25, height: 90, depth: 25, position: {x: -20, y: 100, z: 0}, color: [30, 144, 255]},
+            {type: 'box', width: 25, height: 90, depth: 25, position: {x: 20, y: 100, z: 0}, color: [30, 144, 255]},
+            {type: 'sphere', radius: 8, position: {x: -15, y: -150, z: 35}, color: [0, 0, 0]},
+            {type: 'sphere', radius: 8, position: {x: 15, y: -150, z: 35}, color: [0, 0, 0]},
+            {type: 'mouth', width: 30, height: 10, position: {x: 0, y: -130, z: 35}, color: [139, 0, 0]}
+        ];
+
+        function createBoxFaces(part) {
+            const {width, height, depth, position, color} = part;
+            const halfW = width/2, halfH = height/2, halfD = depth/2;
+            const vertices = [
+                {x: -halfW, y: -halfH, z: -halfD}, {x: halfW, y: -halfH, z: -halfD},
+                {x: halfW, y: halfH, z: -halfD}, {x: -halfW, y: halfH, z: -halfD},
+                {x: -halfW, y: -halfH, z: halfD}, {x: halfW, y: -halfH, z: halfD},
+                {x: halfW, y: halfH, z: halfD}, {x: -halfW, y: halfH, z: halfD}
+            ];
+            return [
+                {vertices: [0, 1, 2, 3], color, centerZ: -halfD},
+                {vertices: [4, 5, 6, 7], color, centerZ: halfD},
+                {vertices: [0, 4, 7, 3], color, centerZ: 0},
+                {vertices: [1, 5, 6, 2], color, centerZ: 0},
+                {vertices: [0, 1, 5, 4], color, centerZ: 0},
+                {vertices: [3, 2, 6, 7], color, centerZ: 0}
+            ].map(face => ({
+                ...face,
+                vertices: face.vertices.map(i => ({
+                    x: vertices[i].x + position.x,
+                    y: vertices[i].y + position.y,
+                    z: vertices[i].z + position.z
+                })),
+                center: {x: position.x, y: position.y, z: position.z + face.centerZ}
+            }));
+        }
+
+        function createSphereFaces(part) {
+            const {radius, position, color} = part;
+            const slices = 12, stacks = 12;
+            const vertices = [];
+            const faces = [];
+            for (let i = 0; i <= stacks; i++) {
+                const phi = Math.PI * i / stacks;
+                for (let j = 0; j <= slices; j++) {
+                    const theta = 2 * Math.PI * j / slices;
+                    vertices.push({
+                        x: radius * Math.sin(phi) * Math.cos(theta) + position.x,
+                        y: radius * Math.sin(phi) * Math.sin(theta) + position.y,
+                        z: radius * Math.cos(phi) + position.z
+                    });
+                }
+            }
+            for (let i = 0; i < stacks; i++) {
+                for (let j = 0; j < slices; j++) {
+                    const a = i * (slices + 1) + j;
+                    const b = a + slices + 1;
+                    faces.push({
+                        vertices: [vertices[a], vertices[b], vertices[b+1], vertices[a+1]],
+                        color,
+                        center: {
+                            x: (vertices[a].x + vertices[b].x + vertices[b+1].x + vertices[a+1].x)/4,
+                            y: (vertices[a].y + vertices[b].y + vertices[b+1].y + vertices[a+1].y)/4,
+                            z: (vertices[a].z + vertices[b].z + vertices[b+1].z + vertices[a+1].z)/4
+                        }
+                    });
+                }
+            }
+            return faces;
+        }
+
+        function createMouthFaces(part) {
+            const {width, height, position, color} = part;
+            const halfW = width/2, halfH = height/2;
+            const segments = 3;
+            const mouthVertices = [];
+            const mouthFaces = [];
+            for (let i = 0; i <= segments; i++) {
+                const t = i/segments;
+                const x = -halfW + t * width;
+                const y = Math.sin(t * Math.PI) * height/3;
+                mouthVertices.push({
+                    x: x + position.x,
+                    y: y + position.y,
+                    z: position.z
+                });
+            }
+            for (let i = 0; i < segments; i++) {
+                mouthFaces.push({
+                    vertices: [
+                        mouthVertices[i],
+                        mouthVertices[i+1],
+                        {x: mouthVertices[i+1].x, y: mouthVertices[i+1].y - height/3, z: position.z},
+                        {x: mouthVertices[i].x, y: mouthVertices[i].y - height/3, z: position.z}
+                    ],
+                    color,
+                    center: {x: position.x, y: position.y - height/6, z: position.z}
+                });
+            }
+            return mouthFaces;
+        }
+
+        function project(point) {
+            const scale = camera.fov / (camera.fov + point.z + camera.distance);
+            return {
+                x: point.x * scale + canvas.width / 2,
+                y: -point.y * scale + canvas.height / 2
+            };
+        }
+
+        function drawFace(face) {
+            const projected = face.vertices.map(project);
+            ctx.beginPath();
+            ctx.moveTo(projected[0].x, projected[0].y);
+            for (let i = 1; i < projected.length; i++) {
+                ctx.lineTo(projected[i].x, projected[i].y);
+            }
+            ctx.closePath();
+            const [r, g, b] = face.color;
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+            ctx.stroke();
+        }
+
+        function rotatePoint(point) {
+            const cosY = Math.cos(camera.angleY);
+            const sinY = Math.sin(camera.angleY);
+            const x1 = point.x * cosY - point.z * sinY;
+            const z1 = point.x * sinY + point.z * cosY;
+            const cosX = Math.cos(camera.angleX);
+            const sinX = Math.sin(camera.angleX);
+            const y1 = point.y * cosX - z1 * sinX;
+            const z2 = point.y * sinX + z1 * cosX;
+            return {x: x1, y: y1, z: z2};
+        }
+
+        function drawGrid() {
+            ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+            ctx.lineWidth = 1;
+            const size = 1000;
+            const step = 50;
+            for (let x = -size; x <= size; x += step) {
+                ctx.beginPath();
+                const p1 = project(rotatePoint({x: x, y: 200, z: -size}));
+                const p2 = project(rotatePoint({x: x, y: 200, z: size}));
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+            }
+            for (let z = -size; z <= size; z += step) {
+                ctx.beginPath();
+                const p1 = project(rotatePoint({x: -size, y: 200, z: z}));
+                const p2 = project(rotatePoint({x: size, y: 200, z: z}));
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+            }
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGrid();
+            let allFaces = [];
+            parts.forEach(part => {
+                if (part.type === 'box') {
+                    allFaces.push(...createBoxFaces(part));
+                } else if (part.type === 'sphere') {
+                    allFaces.push(...createSphereFaces(part));
+                } else if (part.type === 'mouth') {
+                    allFaces.push(...createMouthFaces(part));
+                }
+            });
+            const rotatedFaces = allFaces.map(face => {
+                const rotatedVertices = face.vertices.map(rotatePoint);
+                const rotatedCenter = rotatePoint(face.center);
+                return {
+                    face: {...face, vertices: rotatedVertices},
+                    depth: rotatedCenter.z
+                };
+            });
+            rotatedFaces.sort((a, b) => b.depth - a.depth);
+            rotatedFaces.forEach(({face}) => drawFace(face));
+        }
+
+        // Add the keydown event listener here
+        document.addEventListener('keydown', (e) => {
+            const step = 0.1; // Adjust the step size for smoother transitions
+            switch (e.key.toLowerCase()) {
+                case 'w': // Move camera to show the back of the character
+                    camera.angleX = 0.3; // Slight downward tilt
+                    camera.angleY = 0;   // Facing forward
+                    break;
+                case 's': // Move camera to show the front of the character
+                    camera.angleX = 0.3; // Slight downward tilt
+                    camera.angleY = Math.PI; // Facing backward
+                    break;
+                case 'a': // Move camera to show the left side of the character
+                    camera.angleX = 0.3; // Slight downward tilt
+                    camera.angleY = -Math.PI / 2; // Facing left
+                    break;
+                case 'd': // Move camera to show the right side of the character
+                    camera.angleX = 0.3; // Slight downward tilt
+                    camera.angleY = Math.PI / 2; // Facing right
+                    break;
+            }
+            render(); // Re-render the scene with the updated camera angles
+        });
+
+render();
+        // Mouse/touch event handlers
+        function handleStart(x, y) {
+            isDragging = true;
+            lastX = x;
+            lastY = y;
+        }
+
+        function handleMove(x, y) {
+            if (!isDragging) return;
+            const dx = x - lastX;
+            const dy = y - lastY;
+            // Changed these signs to make rotation direction more natural
+            camera.angleY -= dx * 0.01;  // Changed from += to -=
+            camera.angleX -= dy * 0.01;  // Changed from += to -=
+            lastX = x;
+            lastY = y;
+            render();
+        }
+
+        function handleEnd() {
+            isDragging = false;
+        }
+
+        // Mouse events
+        canvas.addEventListener('mousedown', (e) => {
+            handleStart(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            handleMove(e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('mouseup', handleEnd);
+        canvas.addEventListener('mouseleave', handleEnd);
+
+        // Touch events
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                handleStart(e.touches[0].clientX, e.touches[0].clientY);
+            } else if (e.touches.length === 2) {
+                // Pinch zoom
+                initialPinchDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                initialCameraDistance = camera.distance;
+            }
+        });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 1 && isDragging) {
+                handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            } else if (e.touches.length === 2 && initialPinchDistance !== null) {
+                // Handle pinch zoom
+                const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+                const scale = initialPinchDistance / currentDistance;
+                camera.distance = Math.max(200, Math.min(1000, initialCameraDistance * scale));
+                render();
+            }
+        });
+
+        canvas.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 0) {
+                handleEnd();
+                initialPinchDistance = null;
+            } else if (e.touches.length === 1) {
+                // Switch to rotation mode if one finger remains
+                initialPinchDistance = null;
+                handleStart(e.touches[0].clientX, e.touches[0].clientY);
+            }
+        });
+
+        // Zoom with mouse wheel
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            camera.distance = Math.max(200, Math.min(1000, camera.distance - e.deltaY * 0.5));
+            render();
+        });
+
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            render();
+        });
+
+        render();
+    </script>
+</body>
+</html>
